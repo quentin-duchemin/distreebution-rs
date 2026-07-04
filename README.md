@@ -134,13 +134,27 @@ canonical tiebreak and never triggers on continuous targets.
 ## Citation
 
 ```bibtex
-@article{duchemin2025distreebution,
-  title   = {Efficient distributional regression trees learning algorithms
-             for calibrated non-parametric probabilistic forecasts},
-  author  = {Duchemin, Quentin and Obozinski, Guillaume},
-  journal = {arXiv preprint},
-  year    = {2025}
+
+
+
+@article{duchemin2026,
+	author = {Quentin Duchemin and Guillaume Obozinski},
+	title = {Efficient Distributional Regression Trees Learning Algorithms for Calibrated Non-Parametric Probabilistic Forecasts},
+	journal = {Journal of Computational and Graphical Statistics},
+	volume = {0},
+	number = {0},
+	pages = {1--17},
+	year = {2026},
+	publisher = {Taylor \& Francis},
+	doi = {10.1080/10618600.2026.2675431},
+	URL = { 
+		https://doi.org/10.1080/10618600.2026.2675431
+	},
+	eprint = { 
+		https://doi.org/10.1080/10618600.2026.2675431
+	}
 }
+
 ```
 
 ## Links
