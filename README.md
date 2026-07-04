@@ -30,9 +30,7 @@ rather than squared error:
   forecasts that are both sharp and well-calibrated.
 
 The methodology, theory, and the leave-one-out unbiased estimator of the information gains are
-described in **Duchemin & Obozinski (2025)**, *Efficient distributional regression trees learning
-algorithms for calibrated non-parametric probabilistic forecasts.* The full method documentation
-lives at [quentin-duchemin.github.io/DisTreebution](https://quentin-duchemin.github.io/DisTreebution/).
+described in **Duchemin & Obozinski (2026)**, [Efficient distributional regression trees learning algorithms for calibrated non-parametric probabilistic forecasts](https://doi.org/10.1080/10618600.2026.2675431). The full method documentation lives at [quentin-duchemin.github.io/DisTreebution](https://quentin-duchemin.github.io/DisTreebution/).
 
 ## Why a Rust implementation
 
@@ -126,8 +124,7 @@ distreebution-rs/
 ## Scope and limits
 
 This port covers the core tree types and their split engines. Not ported (kept in the Python
-package): the `WBTree`, the conformalisation / UQ layer, `get_values_leaf_and_groups`, and the
-`limit_use_CRPS` hybrid mode. For exactly-tied target values the split can differ from the
+package): the `WBTree`, the conformalisation / UQ layer and `get_values_leaf_and_groups`. For exactly-tied target values the split can differ from the
 reference, because the Python code relies on NumPy's unstable argsort; this port uses a stable,
 canonical tiebreak and never triggers on continuous targets.
 
@@ -165,4 +162,4 @@ canonical tiebreak and never triggers on continuous targets.
 
 ---
 
-<sub>Method & theory © 2025 Q. Duchemin & G. Obozinski · Swiss Data Science Center.</sub>
+<sub>Method & theory © 2026 Q. Duchemin & G. Obozinski · Swiss Data Science Center.</sub>
