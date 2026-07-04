@@ -87,7 +87,7 @@ X = np.random.randn(3000, 40)
 y = np.sin(2 * np.pi * X[:, 0]) + 0.3 * np.random.randn(3000)
 
 # CRPS regression tree
-tree = rs.RegressionTreeCRPS(max_depth=6, min_samples_split=20)
+tree = rs.RegressionTreeCRPS(max_depth=6, min_samples_split=20, loo=True)
 tree.fit(X.tolist(), y.tolist())
 
 # Route query points to their leaves and read off the pooled training targets

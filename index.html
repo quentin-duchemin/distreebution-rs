@@ -577,11 +577,11 @@
       <div style="height:16px"></div>
       <div class="code-block">
         <button class="copy-btn" data-copy="import distreebu_rs as rs
-tree = rs.RegressionTreeCRPS(max_depth=6, min_samples_split=20)
+tree = rs.RegressionTreeCRPS(max_depth=6, min_samples_split=20, loo=True)
 tree.fit(X, y)
 leaves = tree.get_values_leaf(X_query, idx)">copy</button>
         <span class="k">import</span> distreebu_rs <span class="k">as</span> rs<br>
-        tree = rs.<span class="fn">RegressionTreeCRPS</span>(max_depth=<span class="k">6</span>, min_samples_split=<span class="k">20</span>)<br>
+        tree = rs.<span class="fn">RegressionTreeCRPS</span>(max_depth=<span class="k">6</span>, min_samples_split=<span class="k">20</span>, loo=<span class="k">True</span>)<br>
         tree.<span class="fn">fit</span>(X, y)<br>
         leaves = tree.<span class="fn">get_values_leaf</span>(X_query, idx)
       </div>
