@@ -48,13 +48,6 @@ Put `DisTreebution_rs/` on your path and swap the import prefix:
     # from DisTreebution.CRPSRT.RegressionTree import RegressionTree
     from DisTreebution_rs.CRPSRT import RegressionTree
 
-## Optimizations vs the first version (v0.2)
-
-1. CRPS rank computation O(n^2) -> O(n log n) (value-bucketed Fenwick).
-2. Removed the redundant O(n) left-count scan in the split loop (now O(1)).
-3. Column-major feature storage for cache-friendly per-feature scans.
-4. rayon-parallel feature loop (nodes >= 512 samples); GIL released during fit.
-
 ## Performance parallelism note
 
 The feature loop parallelizes with rayon. Set `RAYON_NUM_THREADS` to control it.
