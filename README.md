@@ -94,39 +94,8 @@ tree.fit(X.tolist(), y.tolist())
 leaves = tree.get_values_leaf(X.tolist(), list(range(len(X))))
 ```
 
-The package exposes `RegressionTreeCRPS`, `RegressionTreeQuadratic`,
-`RegressionTreeQuantile`, and the supporting `FenwickTree` and `MinMaxHeap` data structures, plus
-the raw entropy functions `entropies_crps`, `entropies_quadratic`, and
-`entropies_multi_quantiles`.
+The function for aggregating data points in the leaves is provided in the notebooks containing the experiments.
 
-### Drop-in replacement for DisTreebution
-
-The `DisTreebution_rs/` package mirrors the original Python API. Swap the import prefix and keep
-the rest of your code unchanged:
-
-```python
-# before
-from DisTreebution.CRPSRT.RegressionTree import RegressionTree
-# after
-from DisTreebution_rs.CRPSRT import RegressionTree
-```
-
-## Repository layout
-
-```
-distreebution-rs/
-├── index.html          # source of the presentation / GitHub Pages site
-├── distreebu_rs/       # the Rust crate (src/lib.rs, Cargo.toml, pyproject.toml)
-├── DisTreebution_rs/   # Python drop-in shims over the compiled module
-└── distreebu_rs-0.2.0-…-manylinux_2_17_x86_64.whl
-```
-
-## Scope and limits
-
-This port covers the core tree types and their split engines. Not ported (kept in the Python
-package): the `WBTree`, the conformalisation / UQ layer and `get_values_leaf_and_groups`. For exactly-tied target values the split can differ from the
-reference, because the Python code relies on NumPy's unstable argsort; this port uses a stable,
-canonical tiebreak and never triggers on continuous targets.
 
 ## Citation
 
