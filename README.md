@@ -59,13 +59,13 @@ plots are on the [presentation page](https://quentin-duchemin.github.io/distreeb
 A prebuilt wheel is included — no Rust toolchain required:
 
 ```bash
-pip install distreebu_rs-0.2.0-cp312-cp312-manylinux_2_17_x86_64.whl
+pip install distreebu_rs-0.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 ```
 
 or straight from this repository:
 
 ```bash
-pip install https://github.com/quentin-duchemin/distreebution-rs/raw/main/distreebu_rs-0.2.0-cp312-cp312-manylinux_2_17_x86_64.whl
+pip install https://github.com/quentin-duchemin/distreebution-rs/raw/main/distreebu_rs-0.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 ```
 
 To build from source (needs a Rust toolchain and [maturin](https://github.com/PyO3/maturin)):
