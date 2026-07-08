@@ -243,7 +243,7 @@ fn ranks_and_pos(ysort: &[f64]) -> (Vec<usize>, Vec<usize>) {
     order.sort_unstable_by(|&a, &b| {
         let va = ysort[a as usize];
         let vb = ysort[b as usize];
-        va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
+        va.total_cmp(&vb).then(a.cmp(&b))
     });
     // pos[a] = sorted position of element a
     let mut pos = vec![0usize; n];
@@ -347,7 +347,7 @@ fn level2idx(n: usize, q: f64) -> usize {
 
 fn get_entropy_vals(values: &[f64], quantiles: &[f64]) -> f64 {
     let mut vals = values.to_vec();
-    vals.sort_by(|a,b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    vals.sort_by(|a, b| a.total_cmp(b));
     let n = vals.len(); let tot: f64 = vals.iter().sum();
     let mut cum = 0.0f64; let mut prev = 0usize; let mut res = 0.0f64;
     for &q in quantiles {
@@ -552,8 +552,7 @@ fn best_split_for_feature(
     sc.order.clear();
     sc.order.extend_from_slice(sample_idx);
     sc.order.sort_unstable_by(|&a, &b| {
-        col[a as usize].partial_cmp(&col[b as usize])
-            .unwrap_or(std::cmp::Ordering::Equal)
+        col[a as usize].total_cmp(&col[b as usize])
     });
 
     // Build ysort in feature-sorted order.
@@ -898,7 +897,7 @@ fn best_split_for_feature_quantile(
     if ns <= 1 { return None; }
     let mut order: Vec<u32> = sample_idx.to_vec();
     order.sort_unstable_by(|&a, &b| {
-        col[a as usize].partial_cmp(&col[b as usize]).unwrap_or(std::cmp::Ordering::Equal)
+        col[a as usize].total_cmp(&col[b as usize])
     });
     let order_us: Vec<usize> = order.iter().map(|&a| a as usize).collect();
     let eu = entropies_multi_quantiles(order_us.clone(), y.to_vec(), quantiles.to_vec(), loo);
