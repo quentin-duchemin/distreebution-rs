@@ -13,3 +13,21 @@ class RegressionTreeQuantile:
     def get_values_leaf(self, X, indexes):
         r = self._tree.get_values_leaf(np.asarray(X, dtype=float).tolist(), list(np.asarray(indexes).astype(int)))
         return [[idxs, np.array(yv)] for idxs, yv in r]
+    def save(self, path):
+        self._tree.save(path)
+    @classmethod
+    def load(cls, path):
+        obj = cls.__new__(cls)
+        obj._tree = _Rs.load(path)
+        obj.quantiles = None; obj.max_depth = None
+        obj.min_samples_split = None; obj.IG_biais_correction = None
+        return obj
+    def to_json(self):
+        return self._tree.to_json()
+    @classmethod
+    def from_json(cls, data):
+        obj = cls.__new__(cls)
+        obj._tree = _Rs.from_json(data)
+        obj.quantiles = None; obj.max_depth = None
+        obj.min_samples_split = None; obj.IG_biais_correction = None
+        return obj

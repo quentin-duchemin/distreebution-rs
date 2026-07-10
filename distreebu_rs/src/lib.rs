@@ -485,6 +485,295 @@ impl Arena {
     fn alloc(&mut self, d: NodeData) -> usize { let id=self.nodes.len(); self.nodes.push(d); id }
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// Model persistence  (self-contained JSON — no external serde dependency)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// We serialise the fitted model to a small, human-readable JSON document. Only
+// what is needed to reproduce predictions is stored: the hyper-parameters and the
+// tree topology (feature index, threshold, child ids, and leaf y-values). The
+// training matrix `train_x` is NOT stored — get_values_leaf always receives the
+// query matrix at call time, so a reloaded model just needs X passed explicitly
+// (the normal usage path).
+
+const FORMAT_VERSION: u32 = 1;
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// f64 formatting that round-trips exactly (Rust's `{}` is shortest-round-trip).
+#[inline]
+fn fnum(x: f64) -> String {
+    if x.is_finite() { format!("{}", x) }
+    else if x.is_nan() { "null".to_string() }
+    else if x > 0.0 { "1e999".to_string() }
+    else { "-1e999".to_string() }
+}
+
+fn serialize_arena(arena: &Arena) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(arena.nodes.len());
+    for node in &arena.nodes {
+        match node {
+            NodeData::Leaf(ys) => {
+                let vals: Vec<String> = ys.iter().map(|&v| fnum(v)).collect();
+                parts.push(format!("{{\"t\":\"L\",\"y\":[{}]}}", vals.join(",")));
+            }
+            NodeData::Internal { feat, thr, left, right } => {
+                parts.push(format!(
+                    "{{\"t\":\"I\",\"f\":{},\"s\":{},\"l\":{},\"r\":{}}}",
+                    feat, fnum(*thr), left, right
+                ));
+            }
+        }
+    }
+    format!("[{}]", parts.join(","))
+}
+
+fn model_to_json(
+    kind: &str,
+    max_depth: Option<usize>,
+    min_ss: usize,
+    loo: bool,
+    quantiles: Option<&[f64]>,
+    arena: &Arena,
+    root: Option<usize>,
+) -> String {
+    let md = match max_depth { Some(v) => v.to_string(), None => "null".to_string() };
+    let rt = match root { Some(v) => v.to_string(), None => "null".to_string() };
+    let qs = match quantiles {
+        Some(q) => {
+            let v: Vec<String> = q.iter().map(|&x| fnum(x)).collect();
+            format!("[{}]", v.join(","))
+        }
+        None => "null".to_string(),
+    };
+    format!(
+        "{{\"format\":\"distreebu_rs\",\"version\":{},\"kind\":\"{}\",\
+         \"max_depth\":{},\"min_samples_split\":{},\"loo\":{},\
+         \"quantiles\":{},\"root\":{},\"nodes\":{}}}",
+        FORMAT_VERSION, json_escape(kind), md, min_ss, loo, qs, rt,
+        serialize_arena(arena)
+    )
+}
+
+// ── minimal JSON parser (only what this format needs) ────────────────────────
+struct JParse<'a> { b: &'a [u8], i: usize }
+impl<'a> JParse<'a> {
+    fn new(s: &'a str) -> Self { JParse { b: s.as_bytes(), i: 0 } }
+    fn ws(&mut self) { while self.i < self.b.len() && (self.b[self.i] as char).is_whitespace() { self.i += 1; } }
+    fn peek(&mut self) -> Option<u8> { self.ws(); self.b.get(self.i).copied() }
+    fn expect(&mut self, c: u8) -> Result<(), String> {
+        self.ws();
+        if self.b.get(self.i) == Some(&c) { self.i += 1; Ok(()) }
+        else { Err(format!("expected '{}' at byte {}", c as char, self.i)) }
+    }
+    fn parse_string(&mut self) -> Result<String, String> {
+        self.expect(b'"')?;
+        let mut out = String::new();
+        while self.i < self.b.len() {
+            let c = self.b[self.i]; self.i += 1;
+            match c {
+                b'"' => return Ok(out),
+                b'\\' => {
+                    let e = self.b[self.i]; self.i += 1;
+                    match e {
+                        b'"' => out.push('"'), b'\\' => out.push('\\'),
+                        b'n' => out.push('\n'), b'r' => out.push('\r'), b't' => out.push('\t'),
+                        _ => out.push(e as char),
+                    }
+                }
+                _ => out.push(c as char),
+            }
+        }
+        Err("unterminated string".into())
+    }
+    fn parse_raw_token(&mut self) -> String {
+        self.ws();
+        let start = self.i;
+        while self.i < self.b.len() {
+            let c = self.b[self.i];
+            if c == b',' || c == b'}' || c == b']' || (c as char).is_whitespace() { break; }
+            self.i += 1;
+        }
+        String::from_utf8_lossy(&self.b[start..self.i]).to_string()
+    }
+    fn skip_value(&mut self) -> Result<(), String> {
+        match self.peek() {
+            Some(b'"') => { self.parse_string()?; }
+            Some(b'[') => { self.expect(b'[')?;
+                if self.peek() == Some(b']') { self.expect(b']')?; return Ok(()); }
+                loop { self.skip_value()?; match self.peek() {
+                    Some(b',') => { self.expect(b',')?; }
+                    Some(b']') => { self.expect(b']')?; break; }
+                    _ => return Err("bad array".into()) } } }
+            Some(b'{') => { self.expect(b'{')?;
+                if self.peek() == Some(b'}') { self.expect(b'}')?; return Ok(()); }
+                loop { self.parse_string()?; self.expect(b':')?; self.skip_value()?;
+                    match self.peek() {
+                        Some(b',') => { self.expect(b',')?; }
+                        Some(b'}') => { self.expect(b'}')?; break; }
+                        _ => return Err("bad object".into()) } } }
+            _ => { self.parse_raw_token(); }
+        }
+        Ok(())
+    }
+}
+
+fn parse_opt_usize(tok: &str) -> Option<usize> {
+    if tok == "null" { None } else { tok.parse::<usize>().ok() }
+}
+
+fn parse_f64_tok(tok: &str) -> f64 {
+    match tok {
+        "null" => f64::NAN,
+        "1e999" => f64::INFINITY,
+        "-1e999" => f64::NEG_INFINITY,
+        _ => tok.parse::<f64>().unwrap_or(f64::NAN),
+    }
+}
+
+struct ParsedModel {
+    kind: String,
+    max_depth: Option<usize>,
+    min_ss: usize,
+    loo: bool,
+    quantiles: Option<Vec<f64>>,
+    root: Option<usize>,
+    arena: Arena,
+}
+
+fn parse_nodes(p: &mut JParse) -> Result<Arena, String> {
+    let mut arena = Arena::new();
+    p.expect(b'[')?;
+    if p.peek() == Some(b']') { p.expect(b']')?; return Ok(arena); }
+    loop {
+        p.expect(b'{')?;
+        let mut ntype = String::new();
+        let mut feat = 0usize; let mut thr = 0.0f64; let mut left = 0usize; let mut right = 0usize;
+        let mut ys: Vec<f64> = Vec::new();
+        loop {
+            let key = p.parse_string()?;
+            p.expect(b':')?;
+            match key.as_str() {
+                "t" => { ntype = p.parse_string()?; }
+                "f" => { feat = p.parse_raw_token().parse().map_err(|_| "bad feat")?; }
+                "s" => { thr = parse_f64_tok(&p.parse_raw_token()); }
+                "l" => { left = p.parse_raw_token().parse().map_err(|_| "bad left")?; }
+                "r" => { right = p.parse_raw_token().parse().map_err(|_| "bad right")?; }
+                "y" => {
+                    p.expect(b'[')?;
+                    if p.peek() != Some(b']') {
+                        loop {
+                            ys.push(parse_f64_tok(&p.parse_raw_token()));
+                            match p.peek() {
+                                Some(b',') => { p.expect(b',')?; }
+                                Some(b']') => break,
+                                _ => return Err("bad y array".into()),
+                            }
+                        }
+                    }
+                    p.expect(b']')?;
+                }
+                _ => { p.skip_value()?; }
+            }
+            match p.peek() {
+                Some(b',') => { p.expect(b',')?; }
+                Some(b'}') => { p.expect(b'}')?; break; }
+                _ => return Err("bad node object".into()),
+            }
+        }
+        let node = if ntype == "L" { NodeData::Leaf(ys) }
+                   else { NodeData::Internal { feat, thr, left, right } };
+        arena.nodes.push(node);
+        match p.peek() {
+            Some(b',') => { p.expect(b',')?; }
+            Some(b']') => { p.expect(b']')?; break; }
+            _ => return Err("bad nodes array".into()),
+        }
+    }
+    Ok(arena)
+}
+
+fn model_from_json(s: &str) -> Result<ParsedModel, String> {
+    let mut p = JParse::new(s);
+    p.expect(b'{')?;
+    let mut kind = String::new();
+    let mut max_depth: Option<usize> = None;
+    let mut min_ss = 2usize;
+    let mut loo = false;
+    let mut quantiles: Option<Vec<f64>> = None;
+    let mut root: Option<usize> = None;
+    let mut arena: Option<Arena> = None;
+    let mut version = 0u32;
+
+    if p.peek() == Some(b'}') { return Err("empty object".into()); }
+    loop {
+        let key = p.parse_string()?;
+        p.expect(b':')?;
+        match key.as_str() {
+            "format" => { let _ = p.parse_string()?; }
+            "version" => { version = p.parse_raw_token().parse().unwrap_or(0); }
+            "kind" => { kind = p.parse_string()?; }
+            "max_depth" => { max_depth = parse_opt_usize(&p.parse_raw_token()); }
+            "min_samples_split" => { min_ss = p.parse_raw_token().parse().unwrap_or(2); }
+            "loo" => { loo = p.parse_raw_token() == "true"; }
+            "quantiles" => {
+                if p.peek() == Some(b'n') { let _ = p.parse_raw_token(); quantiles = None; }
+                else {
+                    p.expect(b'[')?;
+                    let mut qs = Vec::new();
+                    if p.peek() != Some(b']') {
+                        loop {
+                            qs.push(parse_f64_tok(&p.parse_raw_token()));
+                            match p.peek() {
+                                Some(b',') => { p.expect(b',')?; }
+                                Some(b']') => break,
+                                _ => return Err("bad quantiles".into()),
+                            }
+                        }
+                    }
+                    p.expect(b']')?;
+                    quantiles = Some(qs);
+                }
+            }
+            "root" => { root = parse_opt_usize(&p.parse_raw_token()); }
+            "nodes" => { arena = Some(parse_nodes(&mut p)?); }
+            _ => { p.skip_value()?; }
+        }
+        match p.peek() {
+            Some(b',') => { p.expect(b',')?; }
+            Some(b'}') => { break; }
+            _ => return Err("bad top-level object".into()),
+        }
+    }
+    if version > FORMAT_VERSION {
+        return Err(format!("model format version {} is newer than supported ({})", version, FORMAT_VERSION));
+    }
+    let arena = arena.ok_or("missing nodes")?;
+    Ok(ParsedModel { kind, max_depth, min_ss, loo, quantiles, root, arena })
+}
+
+fn write_file(path: &str, content: &str) -> PyResult<()> {
+    std::fs::write(path, content)
+        .map_err(|e| PyValueError::new_err(format!("could not write '{}': {}", path, e)))
+}
+fn read_file(path: &str) -> PyResult<String> {
+    std::fs::read_to_string(path)
+        .map_err(|e| PyValueError::new_err(format!("could not read '{}': {}", path, e)))
+}
+
 /// Which entropy criterion to use (avoids boxed closures + Vec allocations per call).
 #[derive(Clone, Copy)]
 enum Criterion {
@@ -777,7 +1066,7 @@ fn fit_driver(
 // ─────────────────────────────────────────────────────────────────────────────
 // Python tree classes
 // ─────────────────────────────────────────────────────────────────────────────
-#[pyclass]
+#[pyclass(module="distreebu_rs")]
 pub struct RegressionTreeQuadratic {
     max_depth: Option<usize>, min_ss: usize, loo: bool,
     arena: Arena, root: Option<usize>, train_x: Vec<Vec<f64>>,
@@ -805,9 +1094,34 @@ impl RegressionTreeQuadratic {
         let xref: &[Vec<f64>] = if x.is_empty() { &self.train_x } else { &x };
         Ok(collect_leaves(&self.arena, r, xref, indexes))
     }
+
+    /// Serialise the fitted model to a JSON string.
+    pub fn to_json(&self) -> String {
+        model_to_json("quadratic", self.max_depth, self.min_ss, self.loo, None, &self.arena, self.root)
+    }
+    /// Write the fitted model to `path` (JSON).
+    pub fn save(&self, path: &str) -> PyResult<()> { write_file(path, &self.to_json()) }
+    /// Rebuild a model from a JSON string.
+    #[staticmethod]
+    pub fn from_json(data: &str) -> PyResult<Self> {
+        let m = model_from_json(data).map_err(PyValueError::new_err)?;
+        Ok(Self { max_depth: m.max_depth, min_ss: m.min_ss, loo: m.loo,
+                  arena: m.arena, root: m.root, train_x: Vec::new() })
+    }
+    /// Load a model previously written with `save`.
+    #[staticmethod]
+    pub fn load(path: &str) -> PyResult<Self> { Self::from_json(&read_file(path)?) }
+    // pickle support
+    pub fn __getstate__(&self) -> String { self.to_json() }
+    pub fn __setstate__(&mut self, state: &str) -> PyResult<()> {
+        let m = model_from_json(state).map_err(PyValueError::new_err)?;
+        self.max_depth = m.max_depth; self.min_ss = m.min_ss; self.loo = m.loo;
+        self.arena = m.arena; self.root = m.root; self.train_x = Vec::new();
+        Ok(())
+    }
 }
 
-#[pyclass]
+#[pyclass(module="distreebu_rs")]
 pub struct RegressionTreeCRPS {
     max_depth: Option<usize>, min_ss: usize, loo: bool,
     arena: Arena, root: Option<usize>, train_x: Vec<Vec<f64>>,
@@ -836,9 +1150,33 @@ impl RegressionTreeCRPS {
         let xref: &[Vec<f64>] = if x.is_empty() { &self.train_x } else { &x };
         Ok(collect_leaves(&self.arena, r, xref, indexes))
     }
+
+    /// Serialise the fitted model to a JSON string.
+    pub fn to_json(&self) -> String {
+        model_to_json("crps", self.max_depth, self.min_ss, self.loo, None, &self.arena, self.root)
+    }
+    /// Write the fitted model to `path` (JSON).
+    pub fn save(&self, path: &str) -> PyResult<()> { write_file(path, &self.to_json()) }
+    /// Rebuild a model from a JSON string.
+    #[staticmethod]
+    pub fn from_json(data: &str) -> PyResult<Self> {
+        let m = model_from_json(data).map_err(PyValueError::new_err)?;
+        Ok(Self { max_depth: m.max_depth, min_ss: m.min_ss, loo: m.loo,
+                  arena: m.arena, root: m.root, train_x: Vec::new() })
+    }
+    /// Load a model previously written with `save`.
+    #[staticmethod]
+    pub fn load(path: &str) -> PyResult<Self> { Self::from_json(&read_file(path)?) }
+    pub fn __getstate__(&self) -> String { self.to_json() }
+    pub fn __setstate__(&mut self, state: &str) -> PyResult<()> {
+        let m = model_from_json(state).map_err(PyValueError::new_err)?;
+        self.max_depth = m.max_depth; self.min_ss = m.min_ss; self.loo = m.loo;
+        self.arena = m.arena; self.root = m.root; self.train_x = Vec::new();
+        Ok(())
+    }
 }
 
-#[pyclass]
+#[pyclass(module="distreebu_rs")]
 pub struct RegressionTreeQuantile {
     max_depth: Option<usize>, min_ss: usize, loo: bool, quantiles: Vec<f64>,
     arena: Arena, root: Option<usize>, train_x: Vec<Vec<f64>>,
@@ -867,9 +1205,36 @@ impl RegressionTreeQuantile {
         let xref: &[Vec<f64>] = if x.is_empty() { &self.train_x } else { &x };
         Ok(collect_leaves(&self.arena, r, xref, indexes))
     }
-}
 
-// Quantile trees keep the (heavier) multi-quantile entropy; we still benefit from
+    /// Serialise the fitted model to a JSON string.
+    pub fn to_json(&self) -> String {
+        model_to_json("quantile", self.max_depth, self.min_ss, self.loo,
+                      Some(&self.quantiles), &self.arena, self.root)
+    }
+    /// Write the fitted model to `path` (JSON).
+    pub fn save(&self, path: &str) -> PyResult<()> { write_file(path, &self.to_json()) }
+    /// Rebuild a model from a JSON string.
+    #[staticmethod]
+    pub fn from_json(data: &str) -> PyResult<Self> {
+        let m = model_from_json(data).map_err(PyValueError::new_err)?;
+        let quantiles = m.quantiles.unwrap_or_default();
+        Ok(Self { max_depth: m.max_depth, min_ss: m.min_ss, loo: m.loo, quantiles,
+                  arena: m.arena, root: m.root, train_x: Vec::new() })
+    }
+    /// Load a model previously written with `save`.
+    #[staticmethod]
+    pub fn load(path: &str) -> PyResult<Self> { Self::from_json(&read_file(path)?) }
+    pub fn __getstate__(&self) -> String { self.to_json() }
+    pub fn __setstate__(&mut self, state: &str) -> PyResult<()> {
+        let m = model_from_json(state).map_err(PyValueError::new_err)?;
+        self.max_depth = m.max_depth; self.min_ss = m.min_ss; self.loo = m.loo;
+        self.quantiles = m.quantiles.unwrap_or_default();
+        self.arena = m.arena; self.root = m.root; self.train_x = Vec::new();
+        Ok(())
+    }
+    // pickle calls __new__ with these before __setstate__; quantiles is required.
+    pub fn __getnewargs__(&self) -> (Vec<f64>,) { (self.quantiles.clone(),) }
+}
 // column-major storage + O(1) left-count + parallel features.
 fn fit_quantile_driver(
     x: &[Vec<f64>],

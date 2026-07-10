@@ -77,6 +77,17 @@ maturin build --release
 pip install target/wheels/distreebu_rs-*.whl
 ```
 
+To reproduce the portable wheels, cross-compile against an older glibc with
+[cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) (no Docker needed):
+
+```
+pip install maturin ziglang cargo-zigbuild
+maturin build --release --zig --compatibility manylinux_2_28   # glibc 2.28
+maturin build --release --zig --compatibility manylinux_2_17   # glibc 2.17
+
+pip install target/wheels/distreebu_rs-*.whl
+```
+
 ## Usage
 
 ```python
@@ -95,6 +106,33 @@ leaves = tree.get_values_leaf(X.tolist(), list(range(len(X))))
 ```
 
 The function for aggregating data points in the leaves is provided in the notebooks containing the experiments.
+
+
+## Saving and loading models
+
+Every fitted tree can be persisted. Three equivalent routes:
+
+    # 1. save / load to a JSON file on disk
+    tree.save("model.json")
+    tree = rs.RegressionTreeCRPS.load("model.json")
+
+    # 2. to_json / from_json (in-memory string, e.g. for a database or S3)
+    blob = tree.to_json()
+    tree = rs.RegressionTreeCRPS.from_json(blob)
+
+    # 3. standard pickle (works for single trees and lists/forests)
+    import pickle
+    pickle.dump(forest, open("forest.pkl", "wb"))     # forest = list of trees
+    forest = pickle.load(open("forest.pkl", "rb"))
+
+The serialised model stores only what prediction needs — the hyper-parameters and
+the tree topology (split feature, threshold, child ids, leaf y-values). It does
+**not** store the training matrix, so a reloaded model must be queried with an
+explicit `X` (the normal call pattern). The format is a small, human-readable JSON
+document with a version field for forward compatibility. The same `save`, `load`,
+`to_json`, and `from_json` methods are available on `RegressionTreeQuadratic`,
+`RegressionTreeCRPS`, and `RegressionTreeQuantile`; the quantile levels are
+preserved for `RegressionTreeQuantile`.
 
 
 ## Citation
